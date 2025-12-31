@@ -1,0 +1,94 @@
+diff --git a/erts/emulator/nifs/common/prim_file_nif.c b/erts/emulator/nifs/common/prim_file_nif.c
+index 4acedf1692..850293428b 100644
+--- a/erts/emulator/nifs/common/prim_file_nif.c
++++ b/erts/emulator/nifs/common/prim_file_nif.c
+@@ -32,6 +32,9 @@
+ #include "prim_file_nif.h"
+ #include "prim_file_nif_dyncall.h"
+ 
++#include "virtual_fs.h"
++#define VIRTUAL_FS_PATH "/virtual-beam/"
++
+ /* NIF interface declarations */
+ static int load(ErlNifEnv *env, void** priv_data, ERL_NIF_TERM load_info);
+ static int upgrade(ErlNifEnv *env, void** priv_data, void** old_priv_data, ERL_NIF_TERM load_info);
+@@ -1361,8 +1364,29 @@ static ERL_NIF_TERM read_file_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
+ 
+     if((posix_errno = efile_marshal_path(env, argv[0], &path))) {
+         return posix_error_to_tuple(env, posix_errno);
+-    } else if((posix_errno = efile_open(&path, EFILE_MODE_READ, efile_resource_type, &d))) {
+-        return posix_error_to_tuple(env, posix_errno);
++    } else {
++
++        const char* filepath = (const char*)path.data;
++
++        if (strncmp((const char*)path.data, VIRTUAL_FS_PATH, strlen(VIRTUAL_FS_PATH)) == 0) {
++            long int read_len = 0;
++            char* data = VirtualReadFile((char*)filepath+1, &read_len); // +1 to remove leading /
++
++            if (data != NULL) {
++                // TODO: Am I creating binary in an ok way here?
++                if (!enif_alloc_binary(read_len, &result)) {
++                    // TODO: handle rc
++                    // free(data);
++                };
++                memcpy(result.data, data, read_len);
++                free(data);
++                return enif_make_tuple2(env, am_ok, enif_make_binary(env, &result));
++            }
++        }
++
++        if((posix_errno = efile_open(&path, EFILE_MODE_READ, efile_resource_type, &d))) {
++            return posix_error_to_tuple(env, posix_errno);
++        }
+     }
+ 
+     /* read_file() wants to know the file size, so retrieve it now from the
+diff --git a/erts/emulator/sys/unix/erl_main.c b/erts/emulator/sys/unix/erl_main.c
+index f6171540d5..6b133ec0fe 100644
+--- a/erts/emulator/sys/unix/erl_main.c
++++ b/erts/emulator/sys/unix/erl_main.c
+@@ -24,12 +24,43 @@
+ #include "erl_vm.h"
+ #include "global.h"
+ 
++#include <stdlib.h>
++#include "beam_args.h"
++
++static void add_static_args(int *argc, char ***argv)
++{
++    int combined_argc = *argc + beam_argc;
++    char **combined_argv = malloc(sizeof(char*) * (combined_argc + 1)); // +1 for NULL termination
++
++    int argv_idx = 0;
++    combined_argv[argv_idx++] = (*argv)[0];  // Copy program name first
++
++    // Copy compile-time args
++    for (size_t i = 0; i < beam_argc; i++) {
++        combined_argv[argv_idx++] = (char*)beam_argv[i];
++    }
++
++    // Copy runtime args
++    for (size_t i = 1; i < *argc; i++) {
++        combined_argv[argv_idx++] = (*argv)[i];
++    }
++
++    // NULL terminate
++    combined_argv[argv_idx++] = NULL;
++
++    *argc = combined_argc;
++    *argv = combined_argv;
++}
++
+ int
+ main(int argc, char **argv)
+ {
+     /* Must be done before we have a chance to spawn any scheduler threads. */
+     sys_init_signal_stack();
+ 
++    add_static_args(&argc, &argv);
++    setenv("BINDIR", BINDIR, 1);
++
+     erl_start(argc, argv);
+     return 0;
+ }
