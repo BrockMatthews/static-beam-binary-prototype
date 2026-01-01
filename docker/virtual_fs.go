@@ -6,7 +6,7 @@ import (
 	"embed"
 )
 
-//go:embed virtual-beam-extract
+//go:embed virtual-beam
 var virtualFS embed.FS
 
 // TODO: we'll probably have to add a function for file enumeration on the virtual filesystem.
@@ -16,13 +16,9 @@ var virtualFS embed.FS
 //export VirtualReadFile
 func VirtualReadFile(filepathC *C.char, readLen *C.long) *C.char {
 	// NOTE: filepathC is const char*
-    filepath := C.GoString(filepathC)
+	filepath := C.GoString(filepathC)
 
-	// TEMP: fixing -extract
-	f := "virtual-beam-extract/" + filepath[len("virtual-beam/"):]
-
-	data, err := virtualFS.ReadFile(f)
-
+	data, err := virtualFS.ReadFile(filepath)
 	if err != nil {
 		return nil
 	}

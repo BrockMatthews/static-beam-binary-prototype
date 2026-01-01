@@ -56,7 +56,7 @@ WORKDIR /
 RUN ln -s /virtual-beam/otp/bin/erl /usr/local/bin/erl
 
 COPY docker/beam_arg_swiper.py /virtual-beam/otp/bin/x86_64-pc-linux-gnu/beam.smp
-COPY docker/virtual_fs.go /
+COPY docker/virtual_fs.go /go/
 COPY docker/virtual_fs.patch /virtual-beam/otp/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 

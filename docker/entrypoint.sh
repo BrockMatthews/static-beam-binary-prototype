@@ -8,15 +8,15 @@ set -eux
 
 # -- Build the Virtual Filesystem --
 # TODO: need to slim down a lot!
-mkdir -p /virtual-beam-extract/otp/bin
-cp /virtual-beam/otp/bin/start.boot virtual-beam-extract/otp/bin/start.boot
-cp -r /virtual-beam/otp/lib virtual-beam-extract/otp
-cp -r /virtual-beam/app /virtual-beam-extract/
+mkdir -p /go/virtual-beam/otp/bin
+cp /virtual-beam/otp/bin/start.boot /go/virtual-beam/otp/bin/start.boot
+cp -r /virtual-beam/otp/lib /go/virtual-beam/otp
+cp -r /virtual-beam/app /go/virtual-beam/
 
 # Remove this directory, since it contains 'visible😀_file', which we can't currently handle
-rm -r virtual-beam-extract/otp/lib/stdlib/test
+rm -r /go/virtual-beam/otp/lib/stdlib/test
 
-go build -buildmode=c-archive /virtual_fs.go
+go build -buildmode=c-archive /go/virtual_fs.go
 
 mv virtual_fs.a /lib
 mv virtual_fs.h /virtual-beam/otp/erts/emulator/nifs/common/
