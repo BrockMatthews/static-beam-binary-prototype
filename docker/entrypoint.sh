@@ -39,6 +39,8 @@ cd /virtual-beam/otp
 git apply virtual_fs.patch
 
 # -- Rebuild the BEAM --
+
+# TODO: only rebuild beam.smp
 make LDFLAGS="-l:virtual_fs.a"
 
 # -- Copy out artefact --

@@ -1,5 +1,5 @@
 diff --git a/erts/emulator/nifs/common/prim_file_nif.c b/erts/emulator/nifs/common/prim_file_nif.c
-index 4acedf1692..850293428b 100644
+index 4acedf1692..a92bf642ea 100644
 --- a/erts/emulator/nifs/common/prim_file_nif.c
 +++ b/erts/emulator/nifs/common/prim_file_nif.c
 @@ -32,6 +32,9 @@
@@ -12,7 +12,48 @@ index 4acedf1692..850293428b 100644
  /* NIF interface declarations */
  static int load(ErlNifEnv *env, void** priv_data, ERL_NIF_TERM load_info);
  static int upgrade(ErlNifEnv *env, void** priv_data, void** old_priv_data, ERL_NIF_TERM load_info);
-@@ -1361,8 +1364,29 @@ static ERL_NIF_TERM read_file_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
+@@ -1027,8 +1030,16 @@ static ERL_NIF_TERM read_info_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
+ 
+     if((posix_errno = efile_marshal_path(env, argv[0], &path))) {
+         return posix_error_to_tuple(env, posix_errno);
+-    } else if((posix_errno = efile_read_info(&path, follow_links, &info))) {
+-        return posix_error_to_tuple(env, posix_errno);
++    } else {
++        if (strncmp((const char*)path.data, VIRTUAL_FS_PATH, strlen(VIRTUAL_FS_PATH)) == 0) {
++            if (virtual_read_info(&path, &info) == 0) {
++                return build_file_info(env, &info);
++            }
++        }
++
++        if((posix_errno = efile_read_info(&path, follow_links, &info))) {
++            return posix_error_to_tuple(env, posix_errno);
++        }
+     }
+ 
+     return build_file_info(env, &info);
+@@ -1136,8 +1147,19 @@ static ERL_NIF_TERM list_dir_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
+ 
+     if((posix_errno = efile_marshal_path(env, argv[0], &path))) {
+         return posix_error_to_tuple(env, posix_errno);
+-    } else if((posix_errno = efile_list_dir(env, &path, &result))) {
+-        return posix_error_to_tuple(env, posix_errno);
++    } else {
++        if (strncmp((const char*)path.data, VIRTUAL_FS_PATH, strlen(VIRTUAL_FS_PATH)) == 0) {
++            long int read_len = 0;
++
++            if (virtual_list_dir(env, &path, &result) == 0) {
++                return enif_make_tuple2(env, am_ok, result);
++            }
++        }
++
++        if ((posix_errno = efile_list_dir(env, &path, &result)))
++        {
++            return posix_error_to_tuple(env, posix_errno);
++        }
+     }
+ 
+     return enif_make_tuple2(env, am_ok, result);
+@@ -1361,8 +1383,29 @@ static ERL_NIF_TERM read_file_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
  
      if((posix_errno = efile_marshal_path(env, argv[0], &path))) {
          return posix_error_to_tuple(env, posix_errno);
@@ -31,7 +72,7 @@ index 4acedf1692..850293428b 100644
 +                if (!enif_alloc_binary(read_len, &result)) {
 +                    // TODO: handle rc
 +                    // free(data);
-+                };
++                }
 +                memcpy(result.data, data, read_len);
 +                free(data);
 +                return enif_make_tuple2(env, am_ok, enif_make_binary(env, &result));
@@ -44,8 +85,117 @@ index 4acedf1692..850293428b 100644
      }
  
      /* read_file() wants to know the file size, so retrieve it now from the
+diff --git a/erts/emulator/nifs/common/prim_file_nif.h b/erts/emulator/nifs/common/prim_file_nif.h
+index a9cb74ab0b..bc01d68360 100644
+--- a/erts/emulator/nifs/common/prim_file_nif.h
++++ b/erts/emulator/nifs/common/prim_file_nif.h
+@@ -189,6 +189,8 @@ int efile_close(efile_data_t *d, posix_errno_t *error);
+ posix_errno_t efile_read_info(const efile_path_t *path, int follow_link, efile_fileinfo_t *result);
+ posix_errno_t efile_read_handle_info(efile_data_t *d, efile_fileinfo_t *result);
+ 
++int virtual_read_info(const efile_path_t *path, efile_fileinfo_t *result);
++
+ /** @brief Sets the file times to the given values. Refer to efile_fileinfo_t
+  * for a description of each. */
+ posix_errno_t efile_set_time(const efile_path_t *path, Sint64 a_time, Sint64 m_time, Sint64 c_time);
+@@ -210,6 +212,8 @@ posix_errno_t efile_read_link(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_
+  * given directory. */
+ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result);
+ 
++int virtual_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result);
++
+ /** @brief Changes the name of an existing file or directory, from old_path
+  * to new_path.
+  *
+diff --git a/erts/emulator/nifs/unix/unix_prim_file.c b/erts/emulator/nifs/unix/unix_prim_file.c
+index 2bb51651ef..b9e6b10d20 100644
+--- a/erts/emulator/nifs/unix/unix_prim_file.c
++++ b/erts/emulator/nifs/unix/unix_prim_file.c
+@@ -22,6 +22,8 @@
+ #include "config.h"
+ #include "sys.h"
+ 
++#include "virtual_fs.h"
++
+ #ifdef VALGRIND
+ #  include <valgrind/memcheck.h>
+ #endif
+@@ -733,6 +735,34 @@ static void build_file_info(struct stat *data, efile_fileinfo_t *result) {
+     result->gid = data->st_gid;
+ }
+ 
++int virtual_read_info(const efile_path_t *path, efile_fileinfo_t *result)
++{
++    long size;
++    unsigned int mode;
++    long modTime;
++    int isDir;
++
++    if (VirtualReadInfo(path->data+1, &size, &mode, &modTime, &isDir) != 0) {
++        return -1;
++    }
++
++    result->size         = size;
++    result->type         = isDir ? EFILE_FILETYPE_DIRECTORY : EFILE_FILETYPE_REGULAR;
++    result->access       = EFILE_ACCESS_READ;
++    result->mode         = mode;
++    result->links        = 1;
++    result->major_device = 1234;
++    result->minor_device = 0;
++    result->inode        = 1;
++    result->uid          = 0;
++    result->gid          = 0;
++    result->a_time       = modTime;
++    result->m_time       = modTime;
++    result->c_time       = modTime;
++
++    return 0;
++}
++
+ posix_errno_t efile_read_info(const efile_path_t *path, int follow_links, efile_fileinfo_t *result) {
+     struct stat data;
+ 
+@@ -939,6 +969,38 @@ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_T
+     return 0;
+ }
+ 
++int virtual_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result) {
++    ERL_NIF_TERM list_head;
++
++    char **dir_entries = VirtualListDir((char*)path->data+1);
++    if(dir_entries == NULL) {
++        return -1;
++    }
++
++    list_head = enif_make_list(env, 0);
++
++    for (int i = 0; dir_entries[i] != NULL; i++) {
++        char *entry_name = dir_entries[i];
++        int name_length = strlen(entry_name);
++
++        if(!is_ignored_name(name_length, entry_name)) {
++            unsigned char *name_bytes;
++            ERL_NIF_TERM name_term;
++
++            name_bytes = enif_make_new_binary(env, name_length, &name_term);
++            sys_memcpy(name_bytes, entry_name, name_length);
++
++            list_head = enif_make_list_cell(env, name_term, list_head);
++        }
++        free(entry_name);
++    }
++
++    (*result) = list_head;
++    free(dir_entries);
++
++    return 0;
++}
++
+ posix_errno_t efile_rename(const efile_path_t *old_path, const efile_path_t *new_path) {
+     if(rename((const char*)old_path->data, (const char*)new_path->data) < 0) {
+         if(errno == ENOTEMPTY) {
 diff --git a/erts/emulator/sys/unix/erl_main.c b/erts/emulator/sys/unix/erl_main.c
-index f6171540d5..6b133ec0fe 100644
+index f6171540d5..bf3d3c653c 100644
 --- a/erts/emulator/sys/unix/erl_main.c
 +++ b/erts/emulator/sys/unix/erl_main.c
 @@ -24,12 +24,43 @@
